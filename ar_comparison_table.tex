@@ -1,0 +1,25 @@
+% Source SHA-256 ar_reassessment_results.json (scientific digest) e5e6b3d31b32d4d252e96fd1e1de61940ed25ffdff4ed584dba99c8f40bb264d
+% Source SHA-256 ar_reassessment_predictions.csv 7e050e75f297e9fb74265915883b77859205743b87bd23440c1bda388d1638bb
+\begin{table}[htbp]
+\centering\small
+\caption{One-year forecast errors over 48 targets, 1978--2025. The expanding window uses all response years from 1919 through the forecast origin. The recent window uses the last 29 response years from 30 annual observations. Both scores use unrounded forecast means. The Gaussian standard-deviation floor is 1.}
+\label{tab:ar-reassessment}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+& \multicolumn{2}{c}{Expanding window} & \multicolumn{2}{c}{Recent 30-year window} \\
+\cmidrule(lr){2-3}\cmidrule(l){4-5}
+Model & RMSE & MAE & RMSE & MAE \\
+\midrule
+Response mean & 4.414 & 3.613 & 3.895 & 3.211 \\
+Gaussian AR & 4.396 & 3.641 & 3.890 & 3.158 \\
+Gaussian AR mixture & 4.421 & 3.662 & 3.899 & 3.166 \\
+Poisson AR & 4.420 & 3.662 & 3.877 & 3.157 \\
+NB AR & 4.420 & 3.661 & 3.877 & 3.157 \\
+\bottomrule
+\end{tabular}
+\par\smallskip
+\begin{minipage}{0.92\linewidth}\footnotesize
+The response mean averages the same response years used to fit the AR models. NB denotes negative binomial.
+Persistence has RMSE 5.170 and MAE 4.271. The trailing 10-year mean has RMSE 4.009 and MAE 3.183.
+\end{minipage}
+\end{table}

@@ -13,6 +13,7 @@ import tempfile
 from bisect import bisect_left
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, localcontext
 from itertools import accumulate
 from pathlib import Path
 
@@ -28,8 +29,24 @@ CSV_FIELDS = (
 ).split()
 REFIT_JSON = ('results.json', 'model_extension_results.json', 'extension_results.json',
               'forecast_diagnostics.json')
-REFIT_TABLES = ('tables.tex', 'extension_table.tex', 'combination_table.tex')
-REFIT_EXPORTS = ('observed_vs_predicted.csv', 'origin_comparison.png')
+AR_RESULT = 'ar_reassessment_results.json'
+AR_CSV = 'ar_reassessment_predictions.csv'
+REFIT_TABLES = ('tables.tex', 'extension_table.tex', 'combination_table.tex',
+                'ar_comparison_table.tex', 'ar_recent_table.tex')
+REFIT_EXPORTS = ('observed_vs_predicted.csv', 'origin_comparison.png', AR_CSV, 'ar_comparison.png')
+AR_FIELDS = (
+    'protocol model window sd_floor origin target_year horizon training_start_year '
+    'first_response_year training_responses observed predicted_mean signed_error '
+    'squared_error absolute_error'
+).split()
+AR_WINDOWS = ('expanding', 'recent_30')
+GAUSSIAN_MODELS = ('gaussian_ar', 'gaussian_ar_mix')
+AR_FLOORS = (1.0, .5, 2.0)
+AR_PERIODS = ((1978, 2025), (1978, 2000), (2001, 2020), (2021, 2025))
+PRINTED_MEANS = {
+    'printed_ar': (11.73, 10.36, 11.73, 11.15, 9.39),
+    'printed_ar_mix': (9.0, 10.65, 8.98, 8.28, 12.41),
+}
 
 
 def require(condition, message):
@@ -229,6 +246,213 @@ def verify_forecasts():
                    ('frozen_2020_supplement', supplement['rows'])], historical)
     print('Checked both catalogues, 1,825 score records and CSV rows, summaries, and one-year diagnostics.',
           flush=True)
+    return counts | later
+
+
+def ar_scientific_digest(result):
+    stable = {k: v for k, v in result.items() if k not in ('elapsed_seconds', 'runtime', 'scientific_sha256')}
+    payload = json.dumps(stable, sort_keys=True, separators=(',', ':'), allow_nan=False)
+    return hashlib.sha256(payload.encode('utf-8')).hexdigest()
+
+
+def gaussian_affine(model, params, pairs, objective, label):
+    def log_density(y, x, a, b, sd):
+        return -.5 * ((y - a - b * x) / sd) ** 2 - math.log(sd * math.sqrt(2 * math.pi))
+
+    a, b, sd = params[:3]
+    if model == 'gaussian_ar':
+        log_terms = [log_density(y, x, a, b, sd) for x, y in pairs]
+    else:
+        c, d, other_sd, logit = params[3:]
+        w = 1 / (1 + math.exp(-logit))
+        v = 1 / (1 + math.exp(logit))
+        log_w, log_v = math.log(w), math.log(v)
+        log_terms = []
+        for x, y in pairs:
+            left = log_w + log_density(y, x, a, b, sd)
+            right = log_v + log_density(y, x, c, d, other_sd)
+            hi, lo = max(left, right), min(left, right)
+            log_terms.append(hi + math.log1p(math.exp(lo - hi)))
+        a, b = w * a + v * c, w * b + v * d
+    close(-math.fsum(log_terms), objective, f'{label} Gaussian training objective')
+    return a, b
+
+
+def count_objective(a, b, alpha, pairs):
+    terms = []
+    for x, y in pairs:
+        eta = a + b * math.log1p(x)
+        mu = math.exp(eta)
+        if alpha == 0:
+            normalizer = mu
+        else:
+            normalizer = (1 / alpha + y) * math.log1p(alpha * mu)
+            normalizer -= math.fsum(math.log1p(alpha * k) for k in range(y))
+        terms.append(math.lgamma(y + 1) - y * eta + normalizer)
+    return math.fsum(terms)
+
+
+def verify_nb_limit():
+    import numpy as np
+    from ar_reassessment import nb_training, stable_nb_ar_objective
+
+    lag = [5, 12, 24]
+    observed = [0, 19, 10]
+    log_lag = np.log1p(lag)
+    training = nb_training(np.asarray(observed, dtype=float))
+    intercept, slope = 2.5, -.4
+    with localcontext() as ctx:
+        ctx.prec = 60
+        means = [(Decimal('2.5') - Decimal('0.4') * Decimal(1 + x).ln()).exp() for x in lag]
+
+        def high_precision(alpha):
+            value = Decimal(0)
+            for mu, y in zip(means, observed, strict=True):
+                if alpha == 0:
+                    probability = (-mu).exp() * mu ** y / Decimal(math.factorial(y))
+                else:
+                    r = 1 / alpha
+                    p = r / (r + mu)
+                    rising = math.prod(r + k for k in range(y))
+                    probability = rising * p ** r * (1 - p) ** y / Decimal(math.factorial(y))
+                value -= probability.ln()
+            return value
+
+        step = Decimal('1e-20')
+        for alpha in map(Decimal, ('0', '1e-8', '1e-4', '0.2', '2')):
+            obj, gradient = stable_nb_ar_objective([intercept, slope, float(alpha)], log_lag, training)
+            ref = high_precision(alpha)
+            low = max(Decimal(0), alpha - step)
+            d_alpha = (high_precision(alpha + step) - high_precision(low)) / (alpha + step - low)
+            close(obj, float(ref), f'NB mass at alpha={alpha}')
+            close(gradient[2], float(d_alpha), f'NB dispersion derivative at alpha={alpha}')
+
+
+def expected_ar_predictions(result, counts):
+    expected = {}
+    fitted = result['fits']
+    require(set(fitted) == {str(year) for year in range(1977, 2025)}, 'AR fitted origins')
+    for year, fit in fitted.items():
+        origin = int(year)
+        target = origin + 1
+        lag = counts[year]
+        require(fit['origin'] == origin and fit['lag_count'] == lag, f'AR fitted origin {origin}')
+        trailing = [counts[str(t)] for t in range(origin - 9, origin + 1)]
+        for model, start, value in [('persistence', origin, lag),
+                                    ('trailing_10_mean', origin - 9, math.fsum(trailing) / 10)]:
+            expected['rolling', model, 'common', None, target] = (origin, 1, start, None, None, value)
+        for window in AR_WINDOWS:
+            fit_window = fit['windows'][window]
+            start = 1918 if window == 'expanding' else origin - 29
+            n = origin - start
+            training_fields = ('training_start_year', 'first_response_year', 'last_response_year',
+                               'training_observations', 'training_responses')
+            require(tuple(fit_window[k] for k in training_fields) == (start, start + 1, origin, n + 1, n),
+                    f'AR training window {origin} {window}')
+            sample = [counts[str(t)] for t in range(start, origin + 1)]
+            pairs = list(zip(sample[:-1], sample[1:], strict=True))
+            calendar = (origin, 1, start, start + 1, n)
+            mean = math.fsum(sample[1:]) / n
+            close(fit_window['response_mean'], mean, f'AR response mean {origin} {window}')
+            expected['rolling', 'response_mean', window, None, target] = (*calendar, mean)
+            for model, model_fit in fit_window['count_fits'].items():
+                if model == 'iid_nb2_nested_candidate':
+                    a, alpha = model_fit['params']
+                    b = 0
+                else:
+                    a, b, *dispersion = model_fit['params']
+                    alpha = dispersion[0] if dispersion else 0
+                    mean = math.exp(a + b * math.log1p(lag))
+                    expected['rolling', model, window, None, target] = (*calendar, mean)
+                objective = count_objective(a, b, alpha, pairs)
+                close(objective, model_fit['objective'], f'{model} count objective {origin} {window}')
+            for floor in AR_FLOORS:
+                gaussians = fit_window['gaussian_fits_by_sd_floor'][str(floor)]
+                for model in GAUSSIAN_MODELS:
+                    gauss = gaussians[model]
+                    label = (origin, window, model, floor)
+                    a, b = gaussian_affine(model, gauss['params'], pairs, gauss['objective'], label)
+                    expected['rolling', model, window, floor, target] = (*calendar, a + b * lag)
+                    if origin == 2020 and floor == 1.0:
+                        for horizon in range(1, 6):
+                            mean = b ** horizon * lag + a * math.fsum(b ** h for h in range(horizon))
+                            expected['fixed_2020', model, window, floor, origin + horizon] = (
+                                origin, horizon, start, start + 1, n, mean
+                            )
+    for model, means in PRINTED_MEANS.items():
+        for year, mean in enumerate(means, 2021):
+            expected['printed', model, None, None, year] = (None, None, None, None, None, mean)
+    return expected
+
+
+def verify_ar_summaries(summaries, rows):
+    count = 0
+    for protocol, periods in [('rolling', AR_PERIODS), ('fixed_2020', AR_PERIODS[-1:]),
+                              ('printed', AR_PERIODS[-1:])]:
+        groups = {(m, w, f) for p, m, w, f, _ in rows if p == protocol}
+        expected = {(f'{start}-{end}', m, w, f) for start, end in periods for m, w, f in groups}
+        seen = set()
+        for entry in summaries[protocol]:
+            period, model, window, floor = (entry[k] for k in ('period', 'model', 'window', 'sd_floor'))
+            key = (period, model, window, floor)
+            require(key in expected - seen, f'AR summary key {key}')
+            seen.add(key)
+            start, end = map(int, period.split('-'))
+            errors = [rows[protocol, model, window, floor, t] for t in range(start, end + 1)]
+            n = len(errors)
+            require(entry['n'] == n and entry['negative_forecast_means'] == sum(mean < 0 for mean, _ in errors),
+                    f'AR summary counts {key}')
+            close(entry['rmse'], math.sqrt(math.fsum(e ** 2 for _, e in errors) / n), f'AR RMSE {key}')
+            close(entry['mae'], math.fsum(abs(e) for _, e in errors) / n, f'AR MAE {key}')
+            close(entry['mean_signed_error'], math.fsum(e for _, e in errors) / n, f'AR signed error {key}')
+        require(seen == expected, f'{protocol} AR summary coverage')
+        count += len(seen)
+    require(count == 86, 'AR summary total')
+
+
+def verify_ar(counts):
+    from ar_reassessment import plan_digest
+
+    result = load(AR_RESULT)
+    require(result['scientific_sha256'] == ar_scientific_digest(result), 'AR scientific SHA-256')
+    require(result['code_sha256'] == digest(ROOT / 'ar_reassessment.py')
+            and result['design_section_sha256'] == plan_digest()
+            and all(value == digest(ROOT / name) for name, value in result['input_sha256'].items()),
+            'AR input, code, and design provenance')
+    require(result['annual_counts'] == counts and result['predictions_csv_sha256'] == digest(ROOT / AR_CSV),
+            'AR catalogue counts and prediction export digest')
+    snapshot = load('usgs_2021_2025_snapshot.json')
+    boundary = result['original_printed_forecast_source']['benchmark_magnitude_boundary_counts']
+    for year in range(2021, 2026):
+        equal = sum(event['time_utc'].startswith(str(year)) and event['magnitude'] == 7.0
+                    for event in snapshot['event_records'])
+        require(boundary['preferred_magnitude_equal_7'][str(year)] == equal
+                and boundary['preferred_magnitude_above_7'][str(year)] == counts[str(year)] - equal,
+                f'AR supplementary magnitude threshold {year}')
+    expected = expected_ar_predictions(result, counts)
+    rows = {}
+    with (ROOT / AR_CSV).open(newline='', encoding='utf-8') as stream:
+        reader = csv.DictReader(stream)
+        require(reader.fieldnames == AR_FIELDS, 'AR CSV columns')
+        for line, row in enumerate(reader, 2):
+            target = int(row['target_year'])
+            floor = float(row['sd_floor']) if row['sd_floor'] else None
+            key = (row['protocol'], row['model'], row['window'] or None, floor, target)
+            require(key in expected and key not in rows, f'AR CSV line {line} case')
+            *calendar, mean = expected[key]
+            actual_calendar = [int(row[k]) if row[k] else None for k in AR_FIELDS[4:5] + AR_FIELDS[6:10]]
+            observed = counts[str(target)]
+            require(actual_calendar == calendar and int(row['observed']) == observed, f'AR CSV line {line} calendar')
+            actual_mean = float(row['predicted_mean'])
+            close(actual_mean, mean, f'AR CSV line {line} mean')
+            error = actual_mean - observed
+            for field, value in [('signed_error', error), ('squared_error', error ** 2), ('absolute_error', abs(error))]:
+                close(float(row[field]), value, f'AR CSV line {line} {field}')
+            rows[key] = (actual_mean, error)
+    require(rows.keys() == expected.keys() and len(rows) == 990, 'AR CSV case coverage')
+    verify_ar_summaries(result['summaries'], rows)
+    verify_nb_limit()
+    print('Checked 990 AR prediction rows, 86 summaries, training objectives, and the NB limit.', flush=True)
 
 
 def compare_refit(name, directory):
@@ -252,10 +476,11 @@ def compare_refit(name, directory):
 def verify_full(files):
     with tempfile.TemporaryDirectory(prefix='earthquake-reproduction-') as scratch:
         directory = Path(scratch)
-        for name in files.difference(REFIT_JSON + REFIT_TABLES + REFIT_EXPORTS):
+        for name in files.difference(REFIT_JSON + REFIT_TABLES + REFIT_EXPORTS + (AR_RESULT,)):
             shutil.copyfile(ROOT / name, directory / name)
         env = os.environ | {'OPENBLAS_NUM_THREADS': '1', 'MPLCONFIGDIR': str(directory / 'matplotlib')}
-        for name in ('analysis.py', 'extension.py', 'model_extension.py', 'build_assets.py'):
+        for name in ('analysis.py', 'extension.py', 'model_extension.py', 'build_assets.py',
+                     'ar_reassessment.py', 'build_ar_assets.py'):
             print(f'Rerunning {name} in a temporary directory.', flush=True)
             result = subprocess.run([sys.executable, '-B', name], cwd=directory, env=env,
                                     capture_output=True, text=True)
@@ -265,6 +490,9 @@ def verify_full(files):
                 raise SystemExit(result.returncode)
         for name in REFIT_JSON:
             compare_refit(name, directory)
+        recorded, replayed = load(AR_RESULT), load(AR_RESULT, directory)
+        require(recorded['scientific_sha256'] == replayed['scientific_sha256'] == ar_scientific_digest(replayed),
+                'full refit AR scientific SHA-256')
         for name in ('forecast_2020_frozen.json',) + REFIT_EXPORTS:
             require(digest(ROOT / name) == digest(directory / name), f'full refit {name}')
         for name in REFIT_TABLES:
@@ -279,7 +507,7 @@ def main():
     args = parser.parse_args()
     files = verify_manifest()
     os.environ['OPENBLAS_NUM_THREADS'] = '1'
-    verify_forecasts()
+    verify_ar(verify_forecasts())
     if args.full:
         verify_full(files)
 
