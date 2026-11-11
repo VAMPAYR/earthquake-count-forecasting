@@ -1,0 +1,22 @@
+\begin{table}[!htb]
+\centering
+\small
+\caption{Response-mean RMSE across histories and target definitions, 1978--2022.}
+\label{tab:sensitivity}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lrrrrr}
+\toprule
+Target & Expanding & Recent 20 & Recent 30 & Recent 40 & Selected \\
+\midrule
+USGS & 4.405 & 3.920 & 3.898 & 4.052 & 3.904 \\
+USGS, magnitude $>7$ & 3.628 & 3.655 & 3.626 & 3.652 & 3.620 \\
+USGS, magnitude $\geq$7.5 & 2.136 & 2.062 & 2.091 & 2.095 & 2.089 \\
+ISC-GEM & 3.700 & 3.847 & 3.772 & 3.626 & 3.739 \\
+ISC-GEM, including supplement & 3.793 & 3.946 & 3.868 & 3.719 & 3.834 \\
+\bottomrule
+\end{tabular}
+\par\smallskip
+\begin{minipage}{\linewidth}\footnotesize
+Each row is fitted and scored against its own annual count series. Compare histories within a row: changing the magnitude threshold changes the outcome and its scale. The ISC-GEM supplement adds only records with a recorded magnitude at least seven. Records without a magnitude remain unclassified.
+\end{minipage}
+\end{table}

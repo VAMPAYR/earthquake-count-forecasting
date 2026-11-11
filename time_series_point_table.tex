@@ -1,0 +1,25 @@
+\begin{table}[!htb]
+\centering
+\small
+\caption{One-year point accuracy on the 45 common target years, 1978--2022.}
+\label{tab:point}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lrrrrrr}
+\toprule
+ & \multicolumn{3}{c}{USGS} & \multicolumn{3}{c}{ISC-GEM} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}
+Model & Expanding & Recent 30 & Selected & Expanding & Recent 30 & Selected \\
+\midrule
+Response mean & 4.405 & 3.898 & 3.904 & 3.700 & 3.772 & 3.739 \\
+Gaussian AR & 4.362 & 3.913 & 3.983 & 3.736 & 3.793 & 3.778 \\
+Gaussian AR mixture & 4.382 & 3.934 & -- & 3.740 & 3.865 & -- \\
+Poisson AR & 4.397 & 3.905 & 3.959 & 3.742 & 3.790 & 3.770 \\
+Independent negative binomial & 4.405 & 3.898 & 3.904 & 3.700 & 3.772 & 3.739 \\
+Negative-binomial AR & 4.396 & 3.904 & 3.958 & 3.742 & 3.790 & 3.770 \\
+\bottomrule
+\end{tabular}
+\par\smallskip
+\begin{minipage}{\linewidth}\footnotesize
+Entries are RMSE in earthquakes per year. Smaller is better. All models use the same response years within each history. Selected history minimizes the response mean's mean squared error over 20 earlier forecasts and is shared across models. The Gaussian mixture uses a standard-deviation floor of one. It has no selected-history arm. Independent Poisson has exactly the response-mean point forecast.
+\end{minipage}
+\end{table}

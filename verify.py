@@ -11,7 +11,7 @@ import subprocess
 import sys
 import tempfile
 from bisect import bisect_left
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, localcontext
 from itertools import accumulate
@@ -31,9 +31,29 @@ REFIT_JSON = ('results.json', 'model_extension_results.json', 'extension_results
               'forecast_diagnostics.json')
 AR_RESULT = 'ar_reassessment_results.json'
 AR_CSV = 'ar_reassessment_predictions.csv'
+TS_RESULT = 'time_series_results.json'
+TS_CSV = 'time_series_predictions.csv'
+ISC_SNAPSHOT = 'isc_gem_snapshot.json'
 REFIT_TABLES = ('tables.tex', 'extension_table.tex', 'combination_table.tex',
                 'ar_comparison_table.tex', 'ar_recent_table.tex')
-REFIT_EXPORTS = ('observed_vs_predicted.csv', 'origin_comparison.png', AR_CSV, 'ar_comparison.png')
+REFIT_EXPORTS = ('observed_vs_predicted.csv', 'origin_comparison.png', AR_CSV, 'ar_comparison.png',
+                 ISC_SNAPSHOT, TS_CSV, 'time_series_forecasts.png', 'time_series_catalogues.png',
+                 'time_series_point_table.tex', 'time_series_contrast_table.tex',
+                 'time_series_count_table.tex', 'time_series_sensitivity_table.tex',
+                 'time_series_recent_table.tex')
+TS_FIELDS = (
+    'catalogue model history applied_history half_life sd_floor origin target_year '
+    'training_start_year first_response_year training_observations training_responses observed '
+    'predicted_mean negative_mean signed_error squared_error absolute_error effective_slope fit_source '
+    'dispersion probability nll rps cdf_left cdf_right median lower80 upper80 covered80 width80 '
+    'lower95 upper95 covered95 width95 cap comparison_cap tail_mass_upper tail_first_moment_upper '
+    'mass_discrepancy mean_discrepancy'
+).split()
+TS_INTEGER = set(('origin target_year training_start_year first_response_year training_observations '
+                  'training_responses observed median lower80 upper80 width80 lower95 upper95 width95 '
+                  'cap comparison_cap').split())
+TS_BOOLEAN = {'negative_mean', 'covered80', 'covered95'}
+TS_TEXT = {'catalogue', 'model', 'history', 'applied_history', 'half_life', 'fit_source'}
 AR_FIELDS = (
     'protocol model window sd_floor origin target_year horizon training_start_year '
     'first_response_year training_responses observed predicted_mean signed_error '
@@ -455,6 +475,200 @@ def verify_ar(counts):
     print('Checked 990 AR prediction rows, 86 summaries, training objectives, and the NB limit.', flush=True)
 
 
+def ts_catalogues(ts, usgs_counts, result):
+    from isc_gem_data import build_snapshot
+
+    study_events = {'main': [], 'supplementary': []}
+    isc = build_snapshot(ROOT / 'isc-gem.zip', study_events=study_events)
+    payload = (json.dumps(isc, ensure_ascii=False, allow_nan=False, indent=2) + '\n').encode()
+    require(payload == (ROOT / ISC_SNAPSHOT).read_bytes(), 'ISC-GEM snapshot replay from raw archive')
+    usgs, _ = ts.load_usgs()
+    values = {'usgs_ge_7': usgs_counts}
+    for catalogue, minimum, strict in [('usgs_gt_7', 7, True), ('usgs_ge_7_5', 7.5, False)]:
+        counts = Counter(str(event['when'].year) for event in usgs
+                         if event['mag'] > minimum or (not strict and event['mag'] == minimum))
+        values[catalogue] = {year: counts[year] for year in usgs_counts}
+    for key, catalogue in [('main', 'isc_main_ge_7'),
+                           ('main_plus_supplementary', 'isc_main_plus_supplementary_ge_7')]:
+        annual = isc['annual']
+        values[catalogue] = dict(zip(map(str, annual['years']), annual[key]['mw_ge_7'], strict=True))
+    isc_matching = [
+        {'id': event['eventid'], 'when': datetime.fromisoformat(event['time_utc']),
+         'lat': event['lat'], 'lon': event['lon'], 'mag': event['mw'],
+         'magnitude_type': event['mw_source'], 'catalogue': label}
+        for label, events in study_events.items() for event in events
+    ]
+    audit = ts.match_events([event for event in usgs if event['when'].year <= ts.COMMON_END], isc_matching)
+    require(audit == result['data']['isc_usgs_event_audit'], 'replayed cross-catalogue event audit')
+    return values
+
+
+def ts_reference_mean(counts, origin, length=None, half_life=None):
+    start = 1919 if length is None else origin - length + 2
+    values = [counts[str(year)] for year in range(start, origin + 1)]
+    if half_life is None:
+        return math.fsum(values) / len(values)
+    weights = [2 ** (-age / half_life) for age in range(len(values) - 1, -1, -1)]
+    return math.fsum(w * y for w, y in zip(weights, values, strict=True)) / math.fsum(weights)
+
+
+def ts_selections(ts, catalogue, counts, audits):
+    expected_origins = range(1977, max(map(int, counts)))
+    require([audit['origin'] for audit in audits] == list(expected_origins), f'{catalogue} selector origins')
+    selected = {}
+    for audit in audits:
+        origin = audit['origin']
+        inner = audit['inner_forecasts']
+        require([r['origin'] for r in inner] == list(range(origin - 20, origin)),
+                f'{catalogue} inner origins at {origin}')
+        for row in inner:
+            o = row['origin']
+            require(row['target_year'] == o + 1 and row['observed'] == counts[str(o + 1)],
+                    f'{catalogue} selector calendar at {o}')
+        for selector, field, choices in [('history', 'history_means', ts.HISTORIES),
+                                         ('half_life', 'discounted_means', ts.HALF_LIVES)]:
+            losses = {}
+            for choice, setting in choices.items():
+                args = {'length' if selector == 'history' else 'half_life': setting}
+                predictions = [ts_reference_mean(counts, row['origin'], **args) for row in inner]
+                for forecast, row in zip(predictions, inner, strict=True):
+                    close(forecast, row[field][choice], f'{catalogue} {field} {row["origin"]} {choice}')
+                losses[choice] = math.fsum((prediction - row['observed']) ** 2
+                                           for prediction, row in zip(predictions, inner, strict=True)) / 20
+                close(losses[choice], audit[f'{selector}_inner_mse'][choice],
+                      f'{catalogue} {selector} inner MSE at {origin} {choice}')
+            best = next(key for key in reversed(losses) if losses[key] <= min(losses.values()) + 1e-10)
+            require(best == audit[f'selected_{selector}'], f'{catalogue} {selector} choice at {origin}')
+        selected[origin] = (audit['selected_history'], audit['selected_half_life'])
+    return selected
+
+
+def ts_check_count_row(row, mean, alpha, label):
+    observed = row['observed']
+    cap = row['cap']
+    require(alpha >= 0 and mean >= 0 and 0 <= observed <= cap <= 8192, f'{label} count support')
+    close(row['dispersion'], alpha, f'{label} dispersion')
+    mass = [math.exp(-math.log1p(alpha * mean) / alpha if alpha else -mean)]
+    for count in range(cap):
+        mass.append(mass[-1] * mean * (1 + alpha * count) / ((1 + alpha * mean) * (count + 1)))
+    cdf = list(accumulate(mass))
+    lo95, lo80, median, hi80, hi95 = (bisect_left(cdf, p) for p in (.025, .1, .5, .9, .975))
+    expected = {'probability': mass[observed], 'nll': -math.log(mass[observed]),
+                'rps': math.fsum((p - (k >= observed)) ** 2 for k, p in enumerate(cdf)),
+                'cdf_left': min(cdf[observed - 1], 1) if observed else 0,
+                'cdf_right': min(cdf[observed], 1), 'median': median,
+                'lower80': lo80, 'upper80': hi80, 'covered80': lo80 <= observed <= hi80, 'width80': hi80 - lo80,
+                'lower95': lo95, 'upper95': hi95, 'covered95': lo95 <= observed <= hi95, 'width95': hi95 - lo95}
+    for field, value in expected.items():
+        close(row[field], value, f'{label} {field}')
+    close(math.fsum(mass), 1, f'{label} probability sum')
+    close(math.fsum(k * p for k, p in enumerate(mass)), mean, f'{label} probability mean')
+
+
+def ts_check_row(ts, row, counts, selections, fits, label):
+    model, history = row['model'], row['history']
+    origin, target = row['origin'], row['target_year']
+    chosen, half_life = selections[origin]
+    applied = row['applied_history']
+    if history == 'selected':
+        require(applied == chosen, f'{label} applied selected history')
+    lag_count = counts[str(origin)]
+    if model in ('persistence', 'trailing_10_mean'):
+        start = origin if model == 'persistence' else origin - 9
+        first = start
+        mean = math.fsum(counts[str(y)] for y in range(start, origin + 1)) / (origin - start + 1)
+        require(applied == 'baseline', f'{label} baseline history')
+    elif model == 'discounted_mean':
+        require(applied == 'expanding', f'{label} discounted history')
+        if history == 'selected_discount':
+            require(row['half_life'] == half_life, f'{label} applied half-life')
+        start, first = 1918, 1919
+        mean = ts_reference_mean(counts, origin, half_life=ts.HALF_LIVES[row['half_life']])
+    else:
+        require(applied == (chosen if history == 'selected' else history), f'{label} applied history')
+        start = 1964 if applied == 'expanding_from_1964' else 1918
+        if applied.startswith('recent_'):
+            start = origin - ts.HISTORIES[applied] + 1
+        first = start + 1
+        train = [counts[str(year)] for year in range(start, origin + 1)]
+        pairs = list(zip(train[:-1], train[1:], strict=True))
+        window = fits[str(origin)][applied]
+        if model == 'response_mean':
+            mean = math.fsum(train[1:]) / (origin - start)
+        elif model in GAUSSIAN_MODELS:
+            fit = window['gaussian_fits_by_sd_floor'][str(row['sd_floor'])][model]
+            a, b = gaussian_affine(model, fit['params'], pairs, fit['objective'], label)
+            mean = a + b * lag_count
+        else:
+            fit = window['count_fits'][model]
+            params = fit['params']
+            a = params[0]
+            b = params[1] if model in ('poisson_ar', 'nb2_ar') else 0.0
+            alpha = params[-1] if model in ('iid_nb2', 'nb2_ar') else 0.0
+            mean = math.exp(a + b * math.log1p(lag_count))
+            close(count_objective(a, b, alpha, pairs), fit['objective'], f'{label} fitted likelihood')
+            ts_check_count_row(row, mean, alpha, label)
+        if model != 'response_mean':
+            close(row['effective_slope'], b, f'{label} fitted slope')
+            require(row['fit_source'] == fit['selected_source'], f'{label} fitted source')
+    dates = ('training_start_year', 'first_response_year', 'training_observations', 'training_responses')
+    require(tuple(row[k] for k in dates) == (start, first, origin - start + 1, origin - first + 1),
+            f'{label} training calendar')
+    require(origin + 1 == target and row['observed'] == counts[str(target)], f'{label} observation')
+    close(row['predicted_mean'], mean, f'{label} mean')
+    error = row['predicted_mean'] - row['observed']
+    for field, value in [('signed_error', error), ('squared_error', error ** 2), ('absolute_error', abs(error))]:
+        close(row[field], value, f'{label} {field}')
+    require(row['negative_mean'] == (row['predicted_mean'] < 0), f'{label} negative-mean flag')
+
+
+def verify_time_series(usgs_counts):
+    import numpy as np
+    import time_series_extension as ts
+
+    result = load(TS_RESULT)
+    require(result['scientific_sha256'] == ar_scientific_digest(result), 'time-series scientific SHA-256')
+    require(result['code_sha256'] == digest(ROOT / 'time_series_extension.py')
+            and result['design_section_sha256'] == ts.plan_digest()
+            and result['input_sha256'] == ts.frozen_inputs()
+            and result['predictions_csv_sha256'] == digest(ROOT / TS_CSV), 'time-series inputs and protocol')
+    counts = ts_catalogues(ts, usgs_counts, result)
+    rows = defaultdict(list)
+    with (ROOT / TS_CSV).open(newline='', encoding='utf-8') as stream:
+        reader = csv.DictReader(stream)
+        require(reader.fieldnames == TS_FIELDS, 'time-series CSV columns')
+        for record in reader:
+            typed = {k: (v if k in TS_TEXT else int(v) if k in TS_INTEGER
+                         else {'True': True, 'False': False}[v] if k in TS_BOOLEAN else float(v))
+                     for k, v in record.items() if v}
+            for key in ('half_life', 'sd_floor', 'effective_slope', 'fit_source'):
+                typed.setdefault(key, None)
+            rows[typed['catalogue']].append(typed)
+    total = sum(map(len, rows.values()))
+    require(total == result['forecast_rows'] and rows.keys() == counts.keys() == result['catalogues'].keys(),
+            'time-series case coverage')
+    for catalogue, data in result['catalogues'].items():
+        catalogue_counts = counts[catalogue]
+        require(catalogue_counts == data['raw_series']['annual_counts'], f'{catalogue} annual counts')
+        selections = ts_selections(ts, catalogue, catalogue_counts, data['selection_audit'])
+        groups = defaultdict(list)
+        for row in rows[catalogue]:
+            groups[ts.group_key(row)].append(row)
+            label = (catalogue, row['model'], row['history'], row['origin'])
+            ts_check_row(ts, row, catalogue_counts, selections, data['fits_by_origin_history'], label)
+        last = max(map(int, catalogue_counts))
+        series = np.array([catalogue_counts[str(year)] for year in range(1918, last + 1)])
+        modern = catalogue in ts.MAIN_CATALOGUES
+        require(ts.validate_rows(rows[catalogue], groups, series, modern) == data['validation'],
+                f'{catalogue} forecast coverage and diagnostics')
+        require(ts.summarize(groups, last) == data['scores'], f'{catalogue} score summaries')
+        contrasts = json.loads(json.dumps(ts.contrasts(groups, last, modern), allow_nan=False))
+        require(contrasts == data['paired_contrasts'],
+                f'{catalogue} paired losses, influence and HAC intervals')
+    print(f'Checked ISC-GEM raw data and event matching, {total:,} time-series forecasts, selectors, and paired scores.',
+          flush=True)
+
+
 def compare_refit(name, directory):
     recorded, replayed = load(name), load(name, directory)
     if name == 'results.json':
@@ -476,11 +690,12 @@ def compare_refit(name, directory):
 def verify_full(files):
     with tempfile.TemporaryDirectory(prefix='earthquake-reproduction-') as scratch:
         directory = Path(scratch)
-        for name in files.difference(REFIT_JSON + REFIT_TABLES + REFIT_EXPORTS + (AR_RESULT,)):
+        for name in files.difference(REFIT_JSON + REFIT_TABLES + REFIT_EXPORTS + (AR_RESULT, TS_RESULT)):
             shutil.copyfile(ROOT / name, directory / name)
         env = os.environ | {'OPENBLAS_NUM_THREADS': '1', 'MPLCONFIGDIR': str(directory / 'matplotlib')}
         for name in ('analysis.py', 'extension.py', 'model_extension.py', 'build_assets.py',
-                     'ar_reassessment.py', 'build_ar_assets.py'):
+                     'ar_reassessment.py', 'build_ar_assets.py', 'isc_gem_data.py',
+                     'time_series_extension.py', 'build_time_series_assets.py'):
             print(f'Rerunning {name} in a temporary directory.', flush=True)
             result = subprocess.run([sys.executable, '-B', name], cwd=directory, env=env,
                                     capture_output=True, text=True)
@@ -493,6 +708,9 @@ def verify_full(files):
         recorded, replayed = load(AR_RESULT), load(AR_RESULT, directory)
         require(recorded['scientific_sha256'] == replayed['scientific_sha256'] == ar_scientific_digest(replayed),
                 'full refit AR scientific SHA-256')
+        recorded, replayed = load(TS_RESULT), load(TS_RESULT, directory)
+        require(recorded['scientific_sha256'] == replayed['scientific_sha256'] == ar_scientific_digest(replayed),
+                'full refit time-series scientific SHA-256')
         for name in ('forecast_2020_frozen.json',) + REFIT_EXPORTS:
             require(digest(ROOT / name) == digest(directory / name), f'full refit {name}')
         for name in REFIT_TABLES:
@@ -507,7 +725,9 @@ def main():
     args = parser.parse_args()
     files = verify_manifest()
     os.environ['OPENBLAS_NUM_THREADS'] = '1'
-    verify_ar(verify_forecasts())
+    counts = verify_forecasts()
+    verify_ar(counts)
+    verify_time_series(counts)
     if args.full:
         verify_full(files)
 

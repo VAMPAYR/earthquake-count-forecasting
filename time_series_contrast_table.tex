@@ -1,0 +1,24 @@
+\begin{table}[!htb]
+\centering
+\small
+\caption{Paired squared-error differences on the common target years.}
+\label{tab:contrasts}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lrrrr}
+\toprule
+ & \multicolumn{2}{c}{USGS} & \multicolumn{2}{c}{ISC-GEM} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+Comparison & Difference & 95\% interval & Difference & 95\% interval \\
+\midrule
+Recent mean minus expanding mean & -4.210 & [-8.820, 0.399] & 0.542 & [-1.023, 2.107] \\
+Selected mean minus expanding mean & -4.165 & [-9.325, 0.994] & 0.293 & [-1.856, 2.443] \\
+Selected mean minus recent mean & 0.045 & [-0.595, 0.685] & -0.249 & [-1.279, 0.782] \\
+Recent AR minus recent mean & 0.118 & [-1.090, 1.325] & 0.152 & [-0.961, 1.266] \\
+Recent mixture minus recent AR & 0.164 & [-0.295, 0.623] & 0.552 & [-0.248, 1.353] \\
+\bottomrule
+\end{tabular}
+\par\smallskip
+\begin{minipage}{\linewidth}\footnotesize
+Negative differences favor the first forecast. Units are squared earthquake counts. Recent denotes the 30-observation history, and AR denotes Gaussian AR. Intervals use Bartlett covariance weights through lag three and a normal multiplier of 1.96. They assume a stable mean loss difference and weak dependence. They do not adjust for model selection or multiple comparisons. Lag sensitivities and omitted-year/block checks accompany the saved results.
+\end{minipage}
+\end{table}

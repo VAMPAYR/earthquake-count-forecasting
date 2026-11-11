@@ -1,0 +1,29 @@
+\begin{table}[!htb]
+\centering
+\small
+\caption{Count-distribution forecasts with recent-30 training, 1978--2022.}
+\label{tab:count}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lrrrrrr}
+\toprule
+ & & & \multicolumn{2}{c}{80\% interval} & \multicolumn{2}{c}{95\% interval} \\
+\cmidrule(lr){4-5}\cmidrule(lr){6-7}
+Model & NLL & RPS & Covered (\%) & Width & Covered (\%) & Width \\
+\midrule
+\multicolumn{7}{l}{\textit{USGS}} \\
+Independent Poisson & 2.775 & 2.220 & 80.0 & 9.24 & 95.6 & 14.04 \\
+Independent negative binomial & 2.784 & 2.222 & 82.2 & 9.56 & 95.6 & 14.56 \\
+Poisson AR & 2.778 & 2.227 & 80.0 & 9.27 & 95.6 & 14.20 \\
+Negative-binomial AR & 2.785 & 2.228 & 82.2 & 9.51 & 95.6 & 14.69 \\
+\multicolumn{7}{l}{\textit{ISC-GEM}} \\
+Independent Poisson & 2.739 & 2.125 & 82.2 & 8.98 & 91.1 & 13.51 \\
+Independent negative binomial & 2.761 & 2.138 & 82.2 & 9.36 & 91.1 & 14.00 \\
+Poisson AR & 2.745 & 2.132 & 82.2 & 8.84 & 88.9 & 13.44 \\
+Negative-binomial AR & 2.765 & 2.143 & 82.2 & 9.16 & 88.9 & 13.89 \\
+\bottomrule
+\end{tabular}
+\par\smallskip
+\begin{minipage}{\linewidth}\footnotesize
+NLL is the negative log probability assigned to the observed count. RPS is the ranked probability score. Smaller scores are better. Coverage counts both integer endpoints, and width is the difference between them. These fitted-parameter intervals omit parameter-estimation uncertainty. Scores for all other histories are in the code release.
+\end{minipage}
+\end{table}
