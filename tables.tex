@@ -1,0 +1,36 @@
+\begin{table}[htbp]
+\centering\small
+\caption{Pooled losses and 95\% interval summaries over 288 dependent cases per model. Lower loss is better. Coverage is a percentage; width is the difference between integer endpoints.}
+\label{tab:pooled}
+\begin{tabular}{lrrrrrr}
+\toprule
+Model & NLL & RPS & RMSE & MAE & Coverage & Width \\
+\midrule
+Independent Poisson & 3.0248 & 2.6926 & 4.599 & 3.799 & 91.7 & 13.19 \\
+Independent NB & 2.9880 & 2.6840 & 4.599 & 3.826 & 96.9 & 15.33 \\
+Independent mixture & 2.9896 & 2.6819 & 4.599 & 3.812 & 97.2 & 15.22 \\
+Poisson AR & 3.0198 & 2.6850 & 4.588 & 3.781 & 92.0 & 13.20 \\
+Negative-binomial AR & 2.9853 & 2.6775 & 4.588 & 3.806 & 96.9 & 15.35 \\
+Poisson AR mixture & 2.9872 & 2.6827 & 4.593 & 3.806 & 96.9 & 15.22 \\
+\bottomrule
+\end{tabular}
+\end{table}
+\begin{table}[htbp]
+\centering\small
+\caption{Mean NLL at each horizon, with 36 common origins in each row. The first three models are independent. NB denotes negative binomial; mixture denotes a two-Poisson mixture.}
+\label{tab:horizons}
+\begin{tabular}{rrrrrrr}
+\toprule
+Horizon & Poisson & NB & Mixture & Poisson AR & NB AR & AR mixture \\
+\midrule
+1 & 2.9526 & 2.9276 & 2.9296 & 2.9269 & 2.9093 & 2.8971 \\
+2 & 2.9629 & 2.9367 & 2.9397 & 2.9576 & 2.9342 & 2.9362 \\
+3 & 3.0117 & 2.9756 & 2.9773 & 3.0087 & 2.9751 & 2.9798 \\
+4 & 3.0062 & 2.9780 & 2.9792 & 3.0043 & 2.9778 & 2.9822 \\
+5 & 3.0450 & 3.0044 & 3.0053 & 3.0431 & 3.0043 & 3.0078 \\
+6 & 3.0707 & 3.0286 & 3.0296 & 3.0692 & 3.0285 & 3.0337 \\
+7 & 3.0720 & 3.0270 & 3.0286 & 3.0712 & 3.0270 & 3.0314 \\
+8 & 3.0777 & 3.0264 & 3.0275 & 3.0773 & 3.0262 & 3.0294 \\
+\bottomrule
+\end{tabular}
+\end{table}

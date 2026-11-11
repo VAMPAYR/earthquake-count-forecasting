@@ -1,0 +1,55 @@
+{
+  "scope": "Descriptive one-year forecast errors, targets 1978-2013; no refitting or new observations.",
+  "mean_error_sign": "Forecast mean minus observed count; negative means average underprediction.",
+  "one_year": {
+    "iid_poisson": {
+      "cases": 36,
+      "mean_error_forecast_minus_observed": -2.4767576615627993,
+      "mean_forecast_min": 11.109375,
+      "mean_forecast_max": 12.27659574468085,
+      "observed_min": 6,
+      "observed_max": 24
+    },
+    "iid_nb2": {
+      "cases": 36,
+      "mean_error_forecast_minus_observed": -2.476757699006172,
+      "mean_forecast_min": 11.109374825787668,
+      "mean_forecast_max": 12.27659542705836,
+      "observed_min": 6,
+      "observed_max": 24
+    },
+    "iid_poisson_mix": {
+      "cases": 36,
+      "mean_error_forecast_minus_observed": -2.4767576636784296,
+      "mean_forecast_min": 11.109375096730371,
+      "mean_forecast_max": 12.27659579548709,
+      "observed_min": 6,
+      "observed_max": 24
+    },
+    "poisson_ar": {
+      "cases": 36,
+      "mean_error_forecast_minus_observed": -2.3893812162347454,
+      "mean_forecast_min": 10.891559937388825,
+      "mean_forecast_max": 13.126652849400656,
+      "observed_min": 6,
+      "observed_max": 24
+    },
+    "nb2_ar": {
+      "cases": 36,
+      "mean_error_forecast_minus_observed": -2.390919286450566,
+      "mean_forecast_min": 10.897589241000489,
+      "mean_forecast_max": 13.107632856191703,
+      "observed_min": 6,
+      "observed_max": 24
+    },
+    "poisson_ar_mix": {
+      "cases": 36,
+      "mean_error_forecast_minus_observed": -2.3259780015230382,
+      "mean_forecast_min": 11.01419180479753,
+      "mean_forecast_max": 13.44628835158705,
+      "observed_min": 6,
+      "observed_max": 24
+    }
+  },
+  "csv_rows": 1825
+}
